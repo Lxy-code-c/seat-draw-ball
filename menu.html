@@ -34,6 +34,14 @@ body {
 .btn:hover { background:rgba(255,255,255,0.22); }
 .btn:active { transform:scale(0.94); }
 .val { font-size:16px; color:#ffe9a8; min-width:42px; text-align:center; font-weight:bold; }
+/* 人数可直接输入（v3.4）：平时看起来是文本，点击后可编辑 */
+#totalVal {
+  width:50px; background:transparent; border:none; outline:none;
+  font-family:inherit; padding:2px 0; border-radius:6px;
+  -webkit-user-select:text; user-select:text;
+}
+#totalVal:focus { background:rgba(255,255,255,0.12); }
+#hint { font-size:10px; color:#ffb08a; min-height:13px; line-height:13px; text-align:center; margin-top:2px; letter-spacing:0.5px; }
 
 .line { height:1px; background:rgba(255,255,255,0.10); margin:7px 0; }
 
@@ -63,7 +71,7 @@ body {
     <span class="label">人数</span>
     <span style="display:flex;align-items:center;gap:7px;">
       <button class="btn" id="decBtn">−</button>
-      <span class="val" id="totalVal">--</span>
+      <input class="val" id="totalVal" type="text" inputmode="numeric" maxlength="3" value="--" title="点击可直接输入人数">
       <button class="btn" id="incBtn">＋</button>
     </span>
   </div>
@@ -74,6 +82,7 @@ body {
   <div class="item" id="resetItem">重置（清空记录）</div>
   <div class="item danger" id="quitItem">退出</div>
   <div class="line"></div>
+  <div id="hint"></div>
   <div class="history" id="history">暂无记录</div>
 </div>
 
@@ -82,18 +91,50 @@ body {
   'use strict';
   const totalVal = document.getElementById('totalVal');
   const historyEl = document.getElementById('history');
+  const hintEl = document.getElementById('hint');
   const pinDot = document.getElementById('pinDot');
   const lockDot = document.getElementById('lockDot');
   const autoDot = document.getElementById('autoDot');
   let pin = true;
   let locked = false;
   let autoStart = true;
+  let drawnCount = 0;   // 已抽记录条数（用于内联二次确认）
+  let curTotal = 0;
 
   function send(a) { if (window.appMenu) window.appMenu.action(a); }
+  function setHint(t) { hintEl.textContent = t || ''; }
 
-  document.getElementById('incBtn').addEventListener('click', (e) => { e.stopPropagation(); send('inc'); });
-  document.getElementById('decBtn').addEventListener('click', (e) => { e.stopPropagation(); send('dec'); });
-  document.getElementById('resetItem').addEventListener('click', (e) => { e.stopPropagation(); send('reset'); });
+  // 内联二次确认：第一次点只提示，3 秒内再点同一项才真正执行。
+  // 替代原生 confirm —— 原生模态框会让菜单失焦隐藏，确认完菜单已消失。
+  let pending = null, pendingTimer = null;
+  function clearPending() {
+    pending = null;
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+    setHint('');
+  }
+  function guarded(key, run, why) {
+    if (pending && pending.key === key) { clearPending(); run(); return; }
+    pending = { key, run };
+    setHint('⚠ ' + why + '，请再点一次确认');
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(clearPending, 3000);
+  }
+
+  document.getElementById('incBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (drawnCount > 0) guarded('inc', () => send('inc'), '调整人数会清空已抽记录');
+    else send('inc');
+  });
+  document.getElementById('decBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (drawnCount > 0) guarded('dec', () => send('dec'), '调整人数会清空已抽记录');
+    else send('dec');
+  });
+  document.getElementById('resetItem').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (drawnCount > 0) guarded('reset', () => send('reset'), '重置会清空 ' + drawnCount + ' 条记录');
+    else send('reset');
+  });
   document.getElementById('quitItem').addEventListener('click', (e) => { e.stopPropagation(); send('close'); });
   document.getElementById('pinItem').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -114,6 +155,31 @@ body {
     if (window.appMenu && window.appMenu.setAutostart) window.appMenu.setAutostart(autoStart);
   });
 
+  // ---------- 人数直接输入 ----------
+  function submitTotal() {
+    const v = parseInt(String(totalVal.value).replace(/[^\d]/g, ''), 10);
+    if (!isFinite(v) || v < 1 || v > 200) {
+      totalVal.value = curTotal || '--';
+      setHint('人数范围 1–200');
+      setTimeout(() => { if (hintEl.textContent === '人数范围 1–200') setHint(''); }, 1800);
+      return;
+    }
+    if (v === curTotal) { totalVal.value = v; setHint(''); return; }
+    totalVal.blur();
+    if (drawnCount > 0) guarded('set:' + v, () => window.appMenu.setTotal(v), '修改人数会清空已抽记录');
+    else window.appMenu.setTotal(v);
+  }
+  totalVal.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitTotal(); }
+    else if (e.key === 'Escape') { totalVal.value = curTotal || '--'; totalVal.blur(); setHint(''); }
+  });
+  totalVal.addEventListener('blur', () => {
+    if (String(totalVal.value) === String(curTotal)) return;
+    submitTotal();
+  });
+  totalVal.addEventListener('focus', () => { try { totalVal.select(); } catch (err) {} });
+  totalVal.addEventListener('click', (e) => e.stopPropagation());
+
   // 主进程推送当前自启状态（保持开关与实际一致）
   if (window.appMenu && window.appMenu.onAutostart) {
     window.appMenu.onAutostart((v) => {
@@ -125,10 +191,14 @@ body {
   // 数据从球窗口推送
   if (window.appMenu && window.appMenu.onData) {
     window.appMenu.onData((d) => {
-      if (d && d.total) totalVal.textContent = d.total;
+      if (d && d.total) {
+        curTotal = d.total;
+        if (document.activeElement !== totalVal) totalVal.value = d.total;
+      }
       if (d && d.remain !== undefined) {
+        drawnCount = (d.drawn && d.drawn.length) || 0;
         historyEl.innerHTML = '剩余 <b>' + d.remain + '</b> 个<br>' +
-          (d.drawn && d.drawn.length ? '已抽：' + d.drawn.join('、') : '暂无记录');
+          (drawnCount ? '已抽：' + d.drawn.join('、') : '暂无记录');
       }
       if (d && d.pin !== undefined) {
         pin = !!d.pin;

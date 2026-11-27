@@ -74,6 +74,7 @@ try { fs.mkdirSync(userDataDir, { recursive: true }); } catch (e) {}
 const logFile = path.join(userDataDir, 'error.log');
 const posFile = path.join(userDataDir, 'position.json');
 const posLockFile = path.join(userDataDir, 'poslock.json');
+const pinFile = path.join(userDataDir, 'pin.json');
 app.commandLine.appendSwitch('enable-logging', 'file');
 app.commandLine.appendSwitch('log-file', path.join(userDataDir, 'chrome-debug.log'));
 
@@ -128,7 +129,8 @@ function setBallLocked(locked) {
   if (!ballWin || ballWin.isDestroyed()) return;
   if (locked) {
     const bp = ballWin.getPosition();
-    const disp = screen.getDisplayNearestPoint({ x: bp[0], y: bp[1] });
+    // 修复：用窗口中心点判定所在显示器（旧版用左上角，跨屏时可能吸到错误屏）
+    const disp = screen.getDisplayNearestPoint({ x: bp[0] + BALL_WIN / 2, y: bp[1] + BALL_WIN / 2 });
     const pos = cornerPos(disp, 'right');
     ballWin.setPosition(pos[0], pos[1]);
     ballLocked = true;
@@ -157,11 +159,17 @@ function saveBallPos() {
   if (!ballWin || ballWin.isDestroyed()) return;
   try { fs.writeFileSync(posFile, JSON.stringify(ballWin.getPosition())); } catch (e) {}
 }
-// 恢复位置时做屏幕适配：不在任何显示器可视区内就放回主屏右侧中部
+// 恢复位置时做屏幕适配：不在任何显示器可视区内就拉回"最近的那块屏"。
+// 修复：旧实现只按主屏 clamp，副屏上的位置重启后会被强行拉回主屏。
 function clampPosToDisplay(x, y) {
-  const wa = screen.getPrimaryDisplay().workArea;
-  const cx = Math.max(wa.x, Math.min(x, wa.x + wa.width - BALL_WIN));
-  const cy = Math.max(wa.y, Math.min(y, wa.y + wa.height - BALL_WIN));
+  if (!isFinite(x) || !isFinite(y)) {
+    const pw = screen.getPrimaryDisplay().workArea;
+    return [pw.x + pw.width - BALL_WIN - LOCK_MARGIN, pw.y + Math.round((pw.height - BALL_WIN) / 2)];
+  }
+  const disp = screen.getDisplayNearestPoint({ x: Math.round(x) + BALL_WIN / 2, y: Math.round(y) + BALL_WIN / 2 }) || screen.getPrimaryDisplay();
+  const wa = disp.workArea;
+  const cx = Math.max(wa.x, Math.min(Math.round(x), wa.x + wa.width - BALL_WIN));
+  const cy = Math.max(wa.y, Math.min(Math.round(y), wa.y + wa.height - BALL_WIN));
   return [cx, cy];
 }
 
@@ -196,6 +204,19 @@ let ballLaunchFailCount = 0;   // 球窗口渲染进程启动失败次数（laun
 let menuLaunchFailCount = 0;   // 菜单窗口渲染进程启动失败次数
 let launchFailHinted = false;  // 启动失败提示是否已弹出（防重复打扰）
 let autostartEnabled = true;   // 开机自启状态（默认开启）
+let pinned = true;             // 置顶状态（持久化，重启保持；修复旧版"重启永远置顶"）
+
+// ---------- 置顶状态持久化 ----------
+function loadPin() {
+  try {
+    const d = JSON.parse(fs.readFileSync(pinFile, 'utf8'));
+    if (d && typeof d.pinned === 'boolean') return d.pinned;
+  } catch (e) {}
+  return true;
+}
+function savePin() {
+  try { fs.writeFileSync(pinFile, JSON.stringify({ pinned: !!pinned })); } catch (e) {}
+}
 
 // 窗口形状（清除方形系统阴影）
 // 圆形近似（用多个竖条矩形 union 成圆，Windows 阴影贴合形状）
@@ -275,7 +296,7 @@ function readAutostart() {
   return autostartEnabled;
 }
 
-function buildWinOpts(w, h, transparent) {
+function buildWinOpts(w, h, transparent, focusable) {
   return {
     width: w, height: h,
     frame: false,
@@ -287,8 +308,10 @@ function buildWinOpts(w, h, transparent) {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    alwaysOnTop: true,
+    // 修复：置顶状态持久化（pinned），球窗口默认不抢焦点（点击抽号不打断用户正在输入的程序）
+    alwaysOnTop: pinned,
     skipTaskbar: true,
+    focusable: focusable !== false,
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -339,19 +362,20 @@ function hintLaunchFailed() {
   if (launchFailHinted) return;
   launchFailHinted = true;
   try {
-    dialog.showMessageBoxSync({
+    // 修复：改用非阻塞 showMessageBox，避免同步弹窗卡死主进程
+    dialog.showMessageBox({
       type: 'warning',
       title: '抽取座号',
       message: '程序窗口反复启动失败。\n\n最常见原因是安全软件（杀毒/电脑管家）拦截了程序进程。\n建议：\n1) 将本程序加入安全软件白名单或信任区后重试；\n2) 关闭安全软件后重新打开；\n3) 仍失败时，请把 "' + userDataDir + '\\error.log" 发送给开发者。'
-    });
+    }).catch(() => {});
   } catch (e) { log('提示弹窗失败: ' + String(e)); }
 }
 
 function createMenuWindow() {
-  const opts = buildWinOpts(MENU_W, MENU_H, true);
+  const opts = buildWinOpts(MENU_W, MENU_H, true, true);
   opts.webPreferences.preload = path.join(__dirname, 'preload-menu.js');
   menuWin = new BrowserWindow(opts);
-  menuWin.setAlwaysOnTop(true, 'screen-saver');
+  try { menuWin.setAlwaysOnTop(!!pinned, 'screen-saver'); } catch (e) {}
   menuWin.loadFile('menu.html');
   applyShape(menuWin, () => roundedRectRects(MENU_W, MENU_H, 18, 16));
   // 创建即隐藏：菜单是"按需弹出"，启动时不显示（Linux/X11 上 show:false 的
@@ -363,16 +387,18 @@ function createMenuWindow() {
     try { menuWin.webContents.send('menu-autostart', autostartEnabled); } catch (e) {}
   });
   menuWin.on('blur', () => {
-    if (!menuWin || menuWin.isDestroyed()) return;
+    // 修复：捕获当前窗口局部引用，防止菜单销毁重建后误隐藏新窗口
+    const w = menuWin;
+    if (!w || w.isDestroyed()) return;
     // 延迟 120ms 再判断：鼠标仍悬停在菜单窗口内（例如刚点了菜单项）则不隐藏
     setTimeout(() => {
-      if (!menuWin || menuWin.isDestroyed()) return;
+      if (!w || w.isDestroyed()) return;
       try {
         const p = screen.getCursorScreenPoint();
-        const b = menuWin.getBounds();
+        const b = w.getBounds();
         if (p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) return;
       } catch (e) {}
-      menuWin.hide();
+      try { w.hide(); } catch (e) {}
     }, 120);
   });
   menuWin.on('closed', () => { menuWin = null; });
@@ -394,10 +420,11 @@ function createMenuWindow() {
 }
 
 function createBallWindow() {
-  const opts = buildWinOpts(BALL_WIN, BALL_WIN, true);
+  // 球窗口 focusable:false —— 点击抽号不会把焦点从用户正在操作的程序抢走
+  const opts = buildWinOpts(BALL_WIN, BALL_WIN, true, false);
   opts.webPreferences.preload = path.join(__dirname, 'preload.js');
   ballWin = new BrowserWindow(opts);
-  ballWin.setAlwaysOnTop(true, 'screen-saver');
+  try { ballWin.setAlwaysOnTop(!!pinned, 'screen-saver'); } catch (e) {}
   ballWin.loadFile('index.html');
   applyShape(ballWin, () => circleShapeRects(BALL_WIN, 72));
 
@@ -437,7 +464,7 @@ function createBallWindow() {
   ballLocked = lockState.locked;
   if (ballLocked) {
     const bp = ballWin.getPosition();
-    const disp = screen.getDisplayNearestPoint({ x: bp[0], y: bp[1] });
+    const disp = screen.getDisplayNearestPoint({ x: bp[0] + BALL_WIN / 2, y: bp[1] + BALL_WIN / 2 });
     const pos = lockState.pos && lockState.pos.length === 2
       ? clampPosToDisplay(lockState.pos[0], lockState.pos[1])
       : cornerPos(disp, 'right');
@@ -486,6 +513,8 @@ function createBallWindow() {
 }
 
 app.whenReady().then(() => {
+  // 修复：未获得单实例锁时必须停止初始化，否则第二个实例仍会创建窗口（闪现后退出）
+  if (!gotSingleLock) { log('未获得单实例锁，跳过初始化'); app.quit(); return; }
   log('app ready，创建窗口');
   // 开机自启：首次运行（无初始化标记）默认开启并记录；之后遵循用户选择
   try {
@@ -499,6 +528,9 @@ app.whenReady().then(() => {
     }
   } catch (e) { log('自启初始化标记失败: ' + String(e)); }
   applyAutostart(autostartEnabled);
+  // 置顶状态：读取持久化值（默认开启）
+  pinned = loadPin();
+  log('置顶状态: ' + (pinned ? '开启' : '关闭') + '（持久化）');
   // 菜单窗口惰性创建（首次右键时才创建），启动只建小球窗口
   createBallWindow();
 });
@@ -536,13 +568,15 @@ ipcMain.on('ball-open-menu', () => {
 function showMenuAtBall() {
   if (!menuWin || menuWin.isDestroyed()) return;
   const [bx, by] = ballWin ? ballWin.getPosition() : [100, 100];
-  const disp = screen.getDisplayNearestPoint({ x: bx, y: by });
+  // 用球窗口中心点判定显示器，多屏时菜单始终出现在球所在的那块屏
+  const disp = screen.getDisplayNearestPoint({ x: bx + BALL_WIN / 2, y: by + BALL_WIN / 2 });
   const wa = disp.workArea;
   let mx = Math.round(bx + BALL_WIN / 2 - MENU_W / 2);
   let my = by + BALL_WIN + 6;
   if (my + MENU_H > wa.y + wa.height) my = by - MENU_H - 6;
-  if (mx < wa.x) mx = wa.x;
-  if (mx + MENU_W > wa.x + wa.width) mx = wa.x + wa.width - MENU_W;
+  // 修复：上下左右都做边界收敛，避免小球贴顶/贴边时菜单跑到屏幕外
+  my = Math.max(wa.y + 4, Math.min(my, wa.y + wa.height - MENU_H - 4));
+  mx = Math.max(wa.x + 4, Math.min(mx, wa.x + wa.width - MENU_W - 4));
   menuWin.setPosition(mx, my);
   menuWin.show();
   menuWin.focus();
@@ -594,6 +628,10 @@ ipcMain.on('ball-drag-start', () => {
 ipcMain.on('ball-move', (e, dx, dy) => {
   if (ballLocked) return;   // 主进程锁定防御：锁定态绝不受任何移动请求
   if (!ballWin || ballWin.isDestroyed()) return;
+  // 修复：非法坐标直接丢弃（渲染层异常时不会把窗口移出屏幕或抖动）
+  if (!isFinite(dx) || !isFinite(dy)) return;
+  dx = Math.round(dx); dy = Math.round(dy);
+  if (dx === 0 && dy === 0) return;
   const [cx, cy] = ballWin.getPosition();
   const [w, h] = ballWin.getSize();
   // 跟随鼠标所在显示器 clamp（多显示器不卡主屏边界）
@@ -622,16 +660,26 @@ ipcMain.on('win-close', () => {
   app.quit();
 });
 
-// 置顶切换
+// 置顶切换（持久化，重启保持）
 ipcMain.on('win-pin', (e, pin) => {
-  if (ballWin) ballWin.setAlwaysOnTop(!!pin, 'screen-saver');
-  if (menuWin) menuWin.setAlwaysOnTop(!!pin, 'screen-saver');
-  log('置顶切换: ' + (!!pin ? '开' : '关'));
+  pinned = !!pin;
+  savePin();
+  try { if (ballWin && !ballWin.isDestroyed()) ballWin.setAlwaysOnTop(pinned, 'screen-saver'); } catch (err) {}
+  try { if (menuWin && !menuWin.isDestroyed()) menuWin.setAlwaysOnTop(pinned, 'screen-saver'); } catch (err) {}
+  log('置顶切换: ' + (pinned ? '开' : '关') + '（已保存）');
 });
 
 // 位置锁定切换（来自菜单）
 ipcMain.on('win-lock-toggle', () => {
+  if (!ballWin || ballWin.isDestroyed()) return;
   setBallLocked(!ballLocked);
+});
+
+// 人数直接输入（菜单输入框提交）
+ipcMain.on('menu-set-total', (e, n) => {
+  const v = Number(n);
+  if (!isFinite(v)) return;
+  if (ballWin && !ballWin.isDestroyed()) ballWin.webContents.send('app-action', 'set-total', Math.round(v));
 });
 
 // 开机自启切换（来自菜单）

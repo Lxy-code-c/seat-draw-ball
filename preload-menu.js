@@ -5,6 +5,7 @@ try { ipcRenderer.send('renderer-ready-menu'); } catch (e) {}
 
 contextBridge.exposeInMainWorld('appMenu', {
   action: (a) => ipcRenderer.send('menu-action', a),
+  setTotal: (n) => ipcRenderer.send('menu-set-total', n),
   setAutostart: (en) => ipcRenderer.send('win-autostart', !!en),
   lockToggle: () => ipcRenderer.send('win-lock-toggle'),
   onAutostart: (cb) => ipcRenderer.on('menu-autostart', (e, v) => cb(v)),

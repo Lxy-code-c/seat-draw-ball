@@ -12,5 +12,5 @@ contextBridge.exposeInMainWorld('appBall', {
   dragEnd: () => ipcRenderer.send('ball-drag-end'),
   pushData: (data) => ipcRenderer.send('ball-data-changed', data),
   log: (msg) => ipcRenderer.send('renderer-log', String(msg)),
-  onAction: (cb) => ipcRenderer.on('app-action', (e, action) => cb(action))
+  onAction: (cb) => ipcRenderer.on('app-action', (e, action, value) => cb(action, value))
 });
