@@ -22,12 +22,12 @@ Windows 桌面悬浮小工具：一个透明圆形小球停在桌面角落，**�
 
 | 文件 | 适用系统 | 架构 |
 |---|---|---|
-| `抽取座号-Win10-Win11.exe` | Windows 10 / 11 | x86-64 |
-| `抽取座号-Win11-ARM.exe` | Windows 11 on ARM | ARM64 |
-| `抽取座号-Win7.exe` | Windows 7 / 8 / 8.1 / 10 / 11 | x86-64 |
-| `抽取座号-通用版.exe` | Windows 10 / 11（含 ARM 上的 x64 模拟） | x86-64 |
-| `抽取座号-Win7-Win10-x86教学版.exe` | Windows 7 / 10 / 11 32 位（教室电脑） | x86 |
-| `抽取座号教学版-绿色版.zip` | 同上，免安装解压即用 | x86 |
+| `SeatDraw-Win10-Win11-x64.exe`（抽取座号 Win10/11） | Windows 10 / 11 | x86-64 |
+| `SeatDraw-Win11-ARM64.exe`（抽取座号 Win11 ARM） | Windows 11 on ARM | ARM64 |
+| `SeatDraw-Win7-x64.exe`（抽取座号 Win7） | Windows 7 / 8 / 8.1 / 10 / 11 | x86-64 |
+| `SeatDraw-Universal-x64.exe`（抽取座号 通用版） | Windows 10 / 11（含 ARM 上的 x64 模拟） | x86-64 |
+| `SeatDraw-Teacher-x86-Setup.exe`（抽取座号 教学版） | Windows 7 / 10 / 11 32 位（教室电脑） | x86 |
+| `SeatDraw-Teacher-Portable-x86.zip`（抽取座号 教学版绿色版） | 同上，免安装解压即用 | x86 |
 
 ## 使用方法
 
