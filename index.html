@@ -196,9 +196,19 @@ body { display:flex; align-items:center; justify-content:center; font-family:"Mi
     }
   }
 
+  // 放弃正在进行的一抽（重置/改人数时调用，避免旧池号码被写入新池）
+  function cancelRoll() {
+    if (rollTimer) { clearInterval(rollTimer); rollTimer = null; }
+    pendingFinal = null;
+    rolling = false;
+    rollStartAt = 0;
+    numEl.classList.remove('rolling');
+  }
+
   // v3.4：确认交互下沉到菜单层（内联二次确认）——不再使用 window.confirm。
   // 原因：原生 confirm 是模态框，弹出会让菜单窗口失焦隐藏，用户确认完菜单已消失。
   function resetAll() {
+    cancelRoll();          // 丢弃正在滚动的这一抽，避免旧号码/number 占用新池
     buildPool();
     lastDraw = 0;
     save();
@@ -215,6 +225,7 @@ body { display:flex; align-items:center; justify-content:center; font-family:"Mi
     const v = Math.round(Number(n));
     if (!isFinite(v) || v < MIN || v > MAX) return false;
     if (v === total) return true;
+    cancelRoll();          // 同上
     total = v;
     buildPool();
     lastDraw = 0;

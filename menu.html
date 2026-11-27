@@ -156,24 +156,41 @@ body {
   });
 
   // ---------- 人数直接输入 ----------
+  // 输入后回车 = 明确意图，直接生效（不再要求二次确认，避免"点了没反应"）；
+  // ± 按钮和重置仍保留内联二次确认（误触风险高）。
+  let submitting = false;
   function submitTotal() {
-    const v = parseInt(String(totalVal.value).replace(/[^\d]/g, ''), 10);
+    if (submitting) return;
+    submitting = true;
+    const raw = String(totalVal.value).replace(/[^\d]/g, '');
+    const v = parseInt(raw, 10);
     if (!isFinite(v) || v < 1 || v > 200) {
       totalVal.value = curTotal || '--';
       setHint('人数范围 1–200');
       setTimeout(() => { if (hintEl.textContent === '人数范围 1–200') setHint(''); }, 1800);
+      submitting = false;
       return;
     }
-    if (v === curTotal) { totalVal.value = v; setHint(''); return; }
-    totalVal.blur();
-    if (drawnCount > 0) guarded('set:' + v, () => window.appMenu.setTotal(v), '修改人数会清空已抽记录');
-    else window.appMenu.setTotal(v);
+    if (v === curTotal) { totalVal.value = v; setHint(''); submitting = false; return; }
+    // 乐观更新，让随后的 blur 不重复提交
+    const hadRecord = drawnCount > 0;
+    curTotal = v;
+    totalVal.value = v;
+    window.appMenu.setTotal(v);
+    clearPending();
+    if (hadRecord) {
+      setHint('人数已改为 ' + v + '，记录已清空');
+      setTimeout(() => { if (hintEl.textContent.indexOf('人数已改为') === 0) setHint(''); }, 2200);
+    }
+    submitting = false;
+    if (document.activeElement === totalVal) totalVal.blur();
   }
   totalVal.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); submitTotal(); }
     else if (e.key === 'Escape') { totalVal.value = curTotal || '--'; totalVal.blur(); setHint(''); }
   });
   totalVal.addEventListener('blur', () => {
+    if (submitting) return;
     if (String(totalVal.value) === String(curTotal)) return;
     submitTotal();
   });
