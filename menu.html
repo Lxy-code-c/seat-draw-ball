@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>抽取座号设置</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; }
+html, body { width:220px; height:360px; background:transparent; overflow:hidden; }
+body {
+  display:flex; align-items:center; justify-content:center;
+  font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;
+}
+
+#panel {
+  width:216px; height:356px; border-radius:18px;
+  background: linear-gradient(160deg, rgba(30,44,36,0.98) 0%, rgba(16,24,20,0.98) 100%);
+  border:1px solid rgba(255,255,255,0.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+  padding:12px 12px;
+  display:flex; flex-direction:column;
+}
+
+.title { font-size:12px; color:rgba(246,241,221,0.62); letter-spacing:4px; text-align:center; margin-bottom:10px; }
+
+.row { display:flex; align-items:center; justify-content:space-between; margin:5px 0; }
+.label { font-size:13px; color:#f6f1dd; }
+.btn {
+  width:30px; height:28px; border-radius:9px; border:none;
+  background:rgba(255,255,255,0.10); color:#f6f1dd; font-size:17px;
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  transition: background .15s;
+}
+.btn:hover { background:rgba(255,255,255,0.22); }
+.btn:active { transform:scale(0.94); }
+.val { font-size:16px; color:#ffe9a8; min-width:42px; text-align:center; font-weight:bold; }
+
+.line { height:1px; background:rgba(255,255,255,0.10); margin:7px 0; }
+
+.item {
+  font-size:13px; color:#f6f1dd; padding:7px 8px; border-radius:9px;
+  cursor:pointer; display:flex; align-items:center; justify-content:space-between;
+  transition: background .15s;
+}
+.item:hover { background:rgba(255,255,255,0.10); }
+.item.danger { color:#ff9d8a; }
+.dot { width:9px; height:9px; border-radius:50%; background:#5a5a5a; }
+.dot.on { background:#7dffa9; box-shadow:0 0 8px #7dffa9; }
+
+.history {
+  flex:1; margin-top:6px; min-height:0;
+  font-size:11px; color:rgba(246,241,221,0.55);
+  background:rgba(0,0,0,0.22); border-radius:9px; padding:8px;
+  overflow-y:auto; word-break:break-all; line-height:1.6;
+}
+.history b { color:#ffe9a8; font-weight:bold; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="title">抽 取 座 号</div>
+  <div class="row">
+    <span class="label">人数</span>
+    <span style="display:flex;align-items:center;gap:7px;">
+      <button class="btn" id="decBtn">−</button>
+      <span class="val" id="totalVal">--</span>
+      <button class="btn" id="incBtn">＋</button>
+    </span>
+  </div>
+  <div class="line"></div>
+  <div class="item" id="pinItem"><span>置顶悬浮</span><span class="dot on" id="pinDot"></span></div>
+  <div class="item" id="lockItem"><span>锁定位置</span><span class="dot" id="lockDot"></span></div>
+  <div class="item" id="autoItem"><span>开机自启</span><span class="dot on" id="autoDot"></span></div>
+  <div class="item" id="resetItem">重置（清空记录）</div>
+  <div class="item danger" id="quitItem">退出</div>
+  <div class="line"></div>
+  <div class="history" id="history">暂无记录</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const totalVal = document.getElementById('totalVal');
+  const historyEl = document.getElementById('history');
+  const pinDot = document.getElementById('pinDot');
+  const lockDot = document.getElementById('lockDot');
+  const autoDot = document.getElementById('autoDot');
+  let pin = true;
+  let locked = false;
+  let autoStart = true;
+
+  function send(a) { if (window.appMenu) window.appMenu.action(a); }
+
+  document.getElementById('incBtn').addEventListener('click', (e) => { e.stopPropagation(); send('inc'); });
+  document.getElementById('decBtn').addEventListener('click', (e) => { e.stopPropagation(); send('dec'); });
+  document.getElementById('resetItem').addEventListener('click', (e) => { e.stopPropagation(); send('reset'); });
+  document.getElementById('quitItem').addEventListener('click', (e) => { e.stopPropagation(); send('close'); });
+  document.getElementById('pinItem').addEventListener('click', (e) => {
+    e.stopPropagation();
+    pin = !pin;
+    pinDot.classList.toggle('on', pin);
+    send(pin ? 'pin-on' : 'pin-off');
+  });
+  document.getElementById('lockItem').addEventListener('click', (e) => {
+    e.stopPropagation();
+    locked = !locked;
+    lockDot.classList.toggle('on', locked);
+    if (window.appMenu && window.appMenu.lockToggle) window.appMenu.lockToggle();
+  });
+  document.getElementById('autoItem').addEventListener('click', (e) => {
+    e.stopPropagation();
+    autoStart = !autoStart;
+    autoDot.classList.toggle('on', autoStart);
+    if (window.appMenu && window.appMenu.setAutostart) window.appMenu.setAutostart(autoStart);
+  });
+
+  // 主进程推送当前自启状态（保持开关与实际一致）
+  if (window.appMenu && window.appMenu.onAutostart) {
+    window.appMenu.onAutostart((v) => {
+      autoStart = !!v;
+      autoDot.classList.toggle('on', autoStart);
+    });
+  }
+
+  // 数据从球窗口推送
+  if (window.appMenu && window.appMenu.onData) {
+    window.appMenu.onData((d) => {
+      if (d && d.total) totalVal.textContent = d.total;
+      if (d && d.remain !== undefined) {
+        historyEl.innerHTML = '剩余 <b>' + d.remain + '</b> 个<br>' +
+          (d.drawn && d.drawn.length ? '已抽：' + d.drawn.join('、') : '暂无记录');
+      }
+      if (d && d.pin !== undefined) {
+        pin = !!d.pin;
+        pinDot.classList.toggle('on', pin);
+      }
+      if (d && d.locked !== undefined) {
+        locked = !!d.locked;
+        lockDot.classList.toggle('on', locked);
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

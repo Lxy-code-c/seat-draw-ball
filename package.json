@@ -1,0 +1,6 @@
+{
+  "name": "seat-draw-widget",
+  "version": "1.0.0",
+  "description": "抽取座号 桌面悬浮小工具",
+  "main": "main.js"
+}

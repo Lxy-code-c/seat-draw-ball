@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>抽取座号</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; }
+html, body { width:136px; height:136px; background:transparent; overflow:hidden; }
+body { display:flex; align-items:center; justify-content:center; font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif; }
+
+/* ============ 圆形小球 ============ */
+/* v3.3：彻底去掉所有"外部" box-shadow（黑色投影 + 绿色光晕）——
+   这些投影在透明窗口上就是用户看到的"背后方形阴影"（被窗口边缘
+   裁切后呈方形）。只保留 inset 内阴影做球体立体感，球外零阴影。 */
+#ball {
+  width:120px; height:120px; border-radius:50%;
+  background: radial-gradient(circle at 32% 26%, #44684f 0%, #24382a 55%, #121a15 100%);
+  border:3px solid rgba(255,255,255,0.16);
+  box-shadow:
+    inset 0 0 30px rgba(0,0,0,0.45),
+    inset 0 2px 8px rgba(255,255,255,0.08);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  cursor:pointer; position:relative;
+  transition: box-shadow .2s;
+}
+#ball:hover {
+  box-shadow:
+    inset 0 0 30px rgba(0,0,0,0.45),
+    inset 0 2px 8px rgba(255,255,255,0.10);
+}
+#ball:active { transform:scale(0.97); }
+
+#num {
+  font-size:42px; font-weight:bold; line-height:1;
+  color:#f6f1dd; text-shadow:0 2px 10px rgba(0,0,0,0.65);
+  letter-spacing:1px; min-width:56px; text-align:center;
+}
+#num.rolling { color:#ffe9a8; }
+#sub {
+  font-size:9px; color:rgba(246,241,221,0.75);
+  margin-top:5px; letter-spacing:2px;
+}
+#sub b { color:#ffe9a8; font-weight:bold; }
+
+#lockTag {
+  position:absolute; top:10px; right:14px;
+  width:7px; height:7px; border-radius:50%;
+  background:rgba(246,241,221,0.25);
+  transition: background .2s, box-shadow .2s;
+}
+#lockTag.on {
+  background:#ffd76a;
+  box-shadow:0 0 8px rgba(255,215,106,0.85);
+}
+
+.hint {
+  position:absolute; bottom:-20px; left:0; right:0; text-align:center;
+  font-size:8px; color:rgba(246,241,221,0.35); letter-spacing:1px;
+  pointer-events:none; white-space:nowrap;
+}
+</style>
+</head>
+<body>
+<div id="ball">
+  <div id="num">抽</div>
+  <div id="sub">剩余 <b id="remainText">--</b></div>
+  <div id="lockTag"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const STORE_KEY = 'seat-draw-ball-v1';
+  const ball = document.getElementById('ball');
+  const numEl = document.getElementById('num');
+  const remainEl = document.getElementById('remainText');
+
+  const MAX = 200, MIN = 1;
+  let total = 80;
+  let drawn = [];
+  let remain = [];
+  let rolling = false;
+  let locked = false;   // 位置锁定状态（由主进程推送）
+
+  function buildPool() {
+    remain = [];
+    for (let i = 1; i <= total; i++) remain.push(i);
+    drawn = [];
+  }
+
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ total, drawn })); } catch (e) {}
+  }
+
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+      if (s && s.total && s.total >= MIN && s.total <= MAX) {
+        total = s.total;
+        drawn = Array.isArray(s.drawn) ? s.drawn.filter(n => n >= 1 && n <= total) : [];
+      }
+    } catch (e) {}
+    remain = [];
+    for (let i = 1; i <= total; i++) if (drawn.indexOf(i) === -1) remain.push(i);
+  }
+
+  function updateUI() {
+    remainEl.textContent = remain.length;
+    pushData();
+  }
+
+  // 锁定状态标记（右上角小亮点）
+  function updateLockTag() {
+    const tag = document.getElementById('lockTag');
+    if (tag) tag.classList.toggle('on', locked);
+  }
+
+  function pushData() {
+    try {
+      if (window.appBall && window.appBall.pushData) {
+        window.appBall.pushData({ total: total, remain: remain.length, drawn: drawn });
+      }
+    } catch (e) {}
+  }
+
+  function showNum(t) {
+    numEl.textContent = t;
+  }
+
+  // ---------- 抽取（点一下小球就抽，结果显示在小球上） ----------
+  // v3.2：随机源从 Math.random（伪随机序列，启动初期序列可能相似）
+  // 升级为 crypto.getRandomValues（操作系统级 CSPRNG 真随机），
+  // 并加"连续两次不抽同一个号"保护，消除"每次刚开始就是那几个号"的观感
+  function rnd(n) {
+    const a = new Uint32Array(1);
+    crypto.getRandomValues(a);
+    return a[0] % n;
+  }
+  let lastDraw = 0;   // 上一次抽到的号码（用于相邻去重）
+
+  function doDraw() {
+    if (rolling) return;
+    if (remain.length === 0) {
+      showNum('完');
+      numEl.classList.add('rolling');
+      setTimeout(() => { numEl.classList.remove('rolling'); }, 700);
+      return;
+    }
+    rolling = true;
+    numEl.classList.add('rolling');
+    let final = remain[rnd(remain.length)];
+    // 相邻去重：池子还有多个号码时，避免连续两次抽到同一个号
+    if (remain.length > 1) {
+      let guard = 0;
+      while (final === lastDraw && guard++ < 24) final = remain[rnd(remain.length)];
+    }
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks++;
+      showNum(String(1 + rnd(total)));
+      if (ticks >= 9) {
+        clearInterval(timer);
+        showNum(String(final));
+        numEl.classList.remove('rolling');
+        drawn.push(final);
+        remain = remain.filter(n => n !== final);
+        lastDraw = final;
+        save();
+        updateUI();
+        rolling = false;
+      }
+    }, 62);
+  }
+
+  function resetAll() {
+    if (drawn.length > 0 && !window.confirm('已有 ' + drawn.length + ' 条抽取记录，确定全部重置吗？')) return;
+    buildPool();
+    save();
+    updateUI();
+    showNum('抽');
+  }
+
+  function setTotalDelta(delta) {
+    const next = total + delta;
+    if (next < MIN || next > MAX) return;
+    if (drawn.length > 0 && !window.confirm('已有 ' + drawn.length + ' 条记录，调整人数将清空记录，确定？')) return;
+    total = next;
+    buildPool();
+    save();
+    updateUI();
+  }
+
+  // ---------- 拖拽移动 / 点击抽取 区分 ----------
+  // 用 Pointer Events + setPointerCapture + 屏幕坐标增量：
+  // 1) 按下即捕获指针，拖出窗口/圆形裁剪区事件也不断
+  // 2) 用 screenX/screenY（鼠标屏幕绝对坐标）逐帧差分求增量。
+  //    注意：不能用 movementX/Y —— 窗口跟随鼠标移动时 Chromium 会把
+  //    文档内相对位移算成 0，导致"只能一点一点挪"（Windows 实测现象）。
+  //    屏幕坐标差分不受窗口移动影响，拖拽完全跟手。
+  // 3) pointercancel 兜底清理，不残留拖拽状态
+  let dragStart = null, moved = false, totalMove = 0, lastSX = 0, lastSY = 0;
+
+  ball.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    try { ball.setPointerCapture(e.pointerId); } catch (err) {}
+    dragStart = { t: Date.now() };
+    moved = false;
+    totalMove = 0;
+    lastSX = e.screenX; lastSY = e.screenY;
+    // 锁定时不启动拖拽（不放开窗口形状、不移动），但保留单击抽号
+    if (!locked && window.appBall && window.appBall.dragStart) window.appBall.dragStart();
+  });
+
+  ball.addEventListener('pointermove', (e) => {
+    if (!dragStart || locked) return;
+    const dx = e.screenX - lastSX, dy = e.screenY - lastSY;
+    lastSX = e.screenX; lastSY = e.screenY;
+    totalMove += Math.abs(dx) + Math.abs(dy);
+    if (totalMove > 4) moved = true;
+    if (moved && (dx !== 0 || dy !== 0) && window.appBall && window.appBall.moveBy) {
+      window.appBall.moveBy(dx, dy);
+    }
+  });
+
+  function endDrag(e) {
+    if (!dragStart) return;
+    const elapsed = Date.now() - dragStart.t;
+    const wasDrag = moved && totalMove > 8;
+    const isLeft = !e || e.button === 0 || e.pointerType !== 'mouse';
+    dragStart = null;
+    moved = false;
+    totalMove = 0;
+    try { ball.releasePointerCapture(e.pointerId); } catch (err) {}
+    if (window.appBall && window.appBall.dragEnd) window.appBall.dragEnd();
+    if (!wasDrag && elapsed < 600 && isLeft) {
+      doDraw();               // 单击 = 抽取
+    }
+  }
+
+  ball.addEventListener('pointerup', endDrag);
+  ball.addEventListener('pointercancel', (e) => {
+    dragStart = null;
+    moved = false;
+    totalMove = 0;
+    try { ball.releasePointerCapture(e.pointerId); } catch (err) {}
+    if (window.appBall && window.appBall.dragEnd) window.appBall.dragEnd();
+  });
+
+  // 右键 = 打开菜单
+  ball.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (window.appBall && window.appBall.openMenu) window.appBall.openMenu();
+  });
+
+  // ---------- 来自菜单窗口的操作 ----------
+  if (window.appBall && window.appBall.onAction) {
+    window.appBall.onAction((action) => {
+      if (action === 'inc') setTotalDelta(1);
+      else if (action === 'dec') setTotalDelta(-1);
+      else if (action === 'reset') resetAll();
+      else if (action === 'close') { if (window.appBall.close) window.appBall.close(); }
+      else if (action === 'pin-on') {
+        if (window.appBall.setPin) window.appBall.setPin(true);
+      }
+      else if (action === 'pin-off') {
+        if (window.appBall.setPin) window.appBall.setPin(false);
+      }
+      else if (action === 'lock-on') { locked = true; updateLockTag(); }
+      else if (action === 'lock-off') { locked = false; updateLockTag(); }
+    });
+  }
+
+  // ---------- 初始化 ----------
+  load();
+  updateUI();
+  window.onerror = function (msg, src, line) {
+    try {
+      if (window.appBall && window.appBall.log) window.appBall.log('page-error: ' + msg + ' @' + line);
+    } catch (e) {}
+    return false;
+  };
+})();
+</script>
+</body>
+</html>
